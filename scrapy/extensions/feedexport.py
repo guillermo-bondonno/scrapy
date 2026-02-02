@@ -197,9 +197,14 @@ class S3FeedStorage(BlockingFeedStorage):
         feed_options: dict[str, Any] | None = None,
         session_token: str | None = None,
         region_name: str | None = None,
+        role_arn: str | None = None,
+        role_session_name: str | None = None,
+        external_id: str | None = None,
     ):
         try:
-            import boto3.session  # noqa: PLC0415
+            import boto3  # noqa: PLC0415
+            import botocore.credentials  # noqa: PLC0415
+            import botocore.session  # noqa: PLC0415
         except ImportError:
             raise NotConfigured("missing boto3 library")
         u = urlparse(uri)
@@ -213,15 +218,44 @@ class S3FeedStorage(BlockingFeedStorage):
         self.endpoint_url: str | None = endpoint_url
         self.region_name: str | None = region_name
 
-        boto3_session = boto3.session.Session()
-        self.s3_client = boto3_session.client(
-            "s3",
-            aws_access_key_id=self.access_key,
-            aws_secret_access_key=self.secret_key,
-            aws_session_token=self.session_token,
-            endpoint_url=self.endpoint_url,
-            region_name=self.region_name,
-        )
+        if role_arn:
+            base_session = botocore.session.Session()
+            if self.access_key and self.secret_key:
+                base_session.set_credentials(
+                    self.access_key, self.secret_key, self.session_token
+                )
+            if self.region_name:
+                base_session.set_config_variable("region", self.region_name)
+            source_creds = base_session.get_credentials()
+            extra_args = {"RoleSessionName": role_session_name or "ScrapyFeedExport"}
+            if external_id:
+                extra_args["ExternalId"] = external_id
+            fetcher = botocore.credentials.AssumeRoleCredentialFetcher(
+                client_creator=base_session.create_client,
+                source_credentials=source_creds,
+                role_arn=role_arn,
+                extra_args=extra_args,
+            )
+            refreshable = botocore.credentials.DeferredRefreshableCredentials(
+                method="assume-role",
+                refresh_using=fetcher.fetch_credentials,
+            )
+            assumed_session = botocore.session.Session()
+            assumed_session._credentials = refreshable
+            if self.region_name:
+                assumed_session.set_config_variable("region", self.region_name)
+            self.s3_client = boto3.Session(botocore_session=assumed_session).client(
+                "s3", endpoint_url=self.endpoint_url
+            )
+        else:
+            self.s3_client = boto3.client(
+                "s3",
+                aws_access_key_id=self.access_key,
+                aws_secret_access_key=self.secret_key,
+                aws_session_token=self.session_token,
+                endpoint_url=self.endpoint_url,
+                region_name=self.region_name,
+            )
 
         if feed_options and feed_options.get("overwrite", True) is False:
             logger.warning(
@@ -246,6 +280,9 @@ class S3FeedStorage(BlockingFeedStorage):
             acl=crawler.settings["FEED_STORAGE_S3_ACL"] or None,
             endpoint_url=crawler.settings["AWS_ENDPOINT_URL"] or None,
             region_name=crawler.settings["AWS_REGION_NAME"] or None,
+            role_arn=crawler.settings["AWS_ROLE_ARN"] or None,
+            role_session_name=crawler.settings["AWS_ROLE_SESSION_NAME"] or None,
+            external_id=crawler.settings["AWS_EXTERNAL_ID"] or None,
             feed_options=feed_options,
         )
 
