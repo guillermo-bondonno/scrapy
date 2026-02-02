@@ -201,10 +201,10 @@ class S3FeedStorage(BlockingFeedStorage):
         role_session_name: str | None = None,
         external_id: str | None = None,
     ):
+        from scrapy.utils.boto import get_botocore_session  # noqa: PLC0415
+
         try:
             import boto3  # noqa: PLC0415
-            import botocore.credentials  # noqa: PLC0415
-            import botocore.session  # noqa: PLC0415
         except ImportError:
             raise NotConfigured("missing boto3 library")
         u = urlparse(uri)
@@ -218,33 +218,17 @@ class S3FeedStorage(BlockingFeedStorage):
         self.endpoint_url: str | None = endpoint_url
         self.region_name: str | None = region_name
 
-        if role_arn:
-            base_session = botocore.session.Session()
-            if self.access_key and self.secret_key:
-                base_session.set_credentials(
-                    self.access_key, self.secret_key, self.session_token
-                )
-            if self.region_name:
-                base_session.set_config_variable("region", self.region_name)
-            source_creds = base_session.get_credentials()
-            extra_args = {"RoleSessionName": role_session_name or "ScrapyFeedExport"}
-            if external_id:
-                extra_args["ExternalId"] = external_id
-            fetcher = botocore.credentials.AssumeRoleCredentialFetcher(
-                client_creator=base_session.create_client,
-                source_credentials=source_creds,
-                role_arn=role_arn,
-                extra_args=extra_args,
-            )
-            refreshable = botocore.credentials.DeferredRefreshableCredentials(
-                method="assume-role",
-                refresh_using=fetcher.fetch_credentials,
-            )
-            assumed_session = botocore.session.Session()
-            assumed_session._credentials = refreshable
-            if self.region_name:
-                assumed_session.set_config_variable("region", self.region_name)
-            self.s3_client = boto3.Session(botocore_session=assumed_session).client(
+        session, is_role = get_botocore_session(
+            self.access_key,
+            self.secret_key,
+            self.session_token,
+            self.region_name,
+            role_arn,
+            role_session_name or "ScrapyFeedExport",
+            external_id,
+        )
+        if is_role:
+            self.s3_client = boto3.Session(botocore_session=session).client(
                 "s3", endpoint_url=self.endpoint_url
             )
         else:

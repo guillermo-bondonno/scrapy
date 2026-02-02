@@ -636,6 +636,34 @@ class TestS3FilesStore:
 
             stub.assert_no_pending_responses()
 
+    def test_role_assumption_settings(self):
+        S3FilesStore.AWS_ACCESS_KEY_ID = "access_key"
+        S3FilesStore.AWS_SECRET_ACCESS_KEY = "secret_key"
+        S3FilesStore.AWS_SESSION_TOKEN = "token"
+        S3FilesStore.AWS_REGION_NAME = "us-east-1"
+        S3FilesStore.AWS_ROLE_ARN = "arn:aws:iam::123456789012:role/test-role"
+        S3FilesStore.AWS_ROLE_SESSION_NAME = "TestSession"
+        S3FilesStore.AWS_EXTERNAL_ID = "ext-123"
+        try:
+            with mock.patch("scrapy.utils.boto.get_botocore_session") as mock_session:
+                mock_botocore_session = mock.MagicMock()
+                mock_session.return_value = (mock_botocore_session, True)
+                store = S3FilesStore("s3://mybucket/files/")
+                mock_session.assert_called_once_with(
+                    "access_key",
+                    "secret_key",
+                    "token",
+                    "us-east-1",
+                    "arn:aws:iam::123456789012:role/test-role",
+                    "TestSession",
+                    "ext-123",
+                )
+                assert store.bucket == "mybucket"
+        finally:
+            S3FilesStore.AWS_ROLE_ARN = None
+            S3FilesStore.AWS_ROLE_SESSION_NAME = None
+            S3FilesStore.AWS_EXTERNAL_ID = None
+
 
 @pytest.mark.skipif(
     "GCS_PROJECT_ID" not in os.environ, reason="GCS_PROJECT_ID not found"

@@ -157,6 +157,9 @@ class S3FilesStore:
     AWS_REGION_NAME = None
     AWS_USE_SSL = None
     AWS_VERIFY = None
+    AWS_ROLE_ARN = None
+    AWS_ROLE_SESSION_NAME = None
+    AWS_EXTERNAL_ID = None
 
     POLICY = "private"  # Overridden from settings.FILES_STORE_S3_ACL in FilesPipeline.from_crawler()
     HEADERS = {
@@ -164,16 +167,25 @@ class S3FilesStore:
     }
 
     def __init__(self, uri: str):
+        from scrapy.utils.boto import get_botocore_session  # noqa: PLC0415
+
         if not is_botocore_available():
             raise NotConfigured("missing botocore library")
-        import botocore.session  # noqa: PLC0415
 
-        session = botocore.session.get_session()
+        session, is_role = get_botocore_session(
+            self.AWS_ACCESS_KEY_ID,
+            self.AWS_SECRET_ACCESS_KEY,
+            self.AWS_SESSION_TOKEN,
+            self.AWS_REGION_NAME,
+            self.AWS_ROLE_ARN,
+            self.AWS_ROLE_SESSION_NAME or "ScrapyFilesPipeline",
+            self.AWS_EXTERNAL_ID,
+        )
         self.s3_client = session.create_client(
             "s3",
-            aws_access_key_id=self.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=self.AWS_SECRET_ACCESS_KEY,
-            aws_session_token=self.AWS_SESSION_TOKEN,
+            aws_access_key_id=None if is_role else self.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=None if is_role else self.AWS_SECRET_ACCESS_KEY,
+            aws_session_token=None if is_role else self.AWS_SESSION_TOKEN,
             endpoint_url=self.AWS_ENDPOINT_URL,
             region_name=self.AWS_REGION_NAME,
             use_ssl=self.AWS_USE_SSL,
@@ -504,6 +516,9 @@ class FilesPipeline(MediaPipeline):
         s3store.AWS_REGION_NAME = settings["AWS_REGION_NAME"]
         s3store.AWS_USE_SSL = settings["AWS_USE_SSL"]
         s3store.AWS_VERIFY = settings["AWS_VERIFY"]
+        s3store.AWS_ROLE_ARN = settings.get("AWS_ROLE_ARN")
+        s3store.AWS_ROLE_SESSION_NAME = settings.get("AWS_ROLE_SESSION_NAME")
+        s3store.AWS_EXTERNAL_ID = settings.get("AWS_EXTERNAL_ID")
         s3store.POLICY = settings["FILES_STORE_S3_ACL"]
 
         gcs_store: type[GCSFilesStore] = cast(

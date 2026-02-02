@@ -505,6 +505,33 @@ class TestS3FeedStorage:
             )
         assert "S3 does not support appending to files" in str(log)
 
+    def test_from_crawler_with_role_assumption_settings(self):
+        settings = {
+            "AWS_ACCESS_KEY_ID": "access_key",
+            "AWS_SECRET_ACCESS_KEY": "secret_key",
+            "AWS_SESSION_TOKEN": "token",
+            "AWS_ENDPOINT_URL": "http://localhost:4566",
+            "AWS_REGION_NAME": "us-east-1",
+            "AWS_ROLE_ARN": "arn:aws:iam::123456789012:role/test-role",
+            "AWS_ROLE_SESSION_NAME": "TestSession",
+            "AWS_EXTERNAL_ID": "ext-123",
+            "FEED_STORAGE_S3_ACL": "private",
+        }
+        crawler = get_crawler(settings_dict=settings)
+        with mock.patch("scrapy.utils.boto.get_botocore_session") as mock_session:
+            mock_session.return_value = (mock.MagicMock(), True)
+            storage = S3FeedStorage.from_crawler(crawler, "s3://mybucket/export.csv")
+            mock_session.assert_called_once_with(
+                "access_key",
+                "secret_key",
+                "token",
+                "us-east-1",
+                "arn:aws:iam::123456789012:role/test-role",
+                "TestSession",
+                "ext-123",
+            )
+            assert storage.acl == "private"
+
 
 class TestGCSFeedStorage:
     def test_parse_settings(self):
