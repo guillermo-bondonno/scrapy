@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import sys
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from urllib.parse import urlparse
 
 import pytest
 from twisted.internet.ssl import Certificate
+from twisted.python.failure import Failure
 
 from scrapy.exceptions import (
     CannotResolveHostError,
@@ -23,21 +25,26 @@ from scrapy.exceptions import (
     DownloadFailedError,
     DownloadTimeoutError,
     ResponseDataLossError,
+    ScrapyDeprecationWarning,
+    StopDownload,
     UnsupportedURLSchemeError,
 )
 from scrapy.http import Headers, HtmlResponse, Request, Response, TextResponse
-from scrapy.utils.defer import (
-    deferred_f_from_coro_f,
-    deferred_from_coro,
-    maybe_deferred_to_future,
-)
+from scrapy.utils.defer import deferred_from_coro, maybe_deferred_to_future
 from scrapy.utils.misc import build_from_crawler
 from scrapy.utils.spider import DefaultSpider
 from scrapy.utils.test import get_crawler
 from tests import NON_EXISTING_RESOLVABLE
 from tests.mockserver.proxy_echo import ProxyEchoMockServer
 from tests.mockserver.simple_https import SimpleMockServer
-from tests.spiders import SingleRequestSpider
+from tests.spiders import (
+    BytesReceivedCallbackSpider,
+    BytesReceivedErrbackSpider,
+    HeadersReceivedCallbackSpider,
+    HeadersReceivedErrbackSpider,
+    SingleRequestSpider,
+)
+from tests.utils.decorators import coroutine_test
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -66,21 +73,21 @@ class TestHttpBase(ABC):
         finally:
             await dh.close()
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_unsupported_scheme(self) -> None:
         request = Request("ftp://unsupported.scheme")
         async with self.get_dh() as download_handler:
             with pytest.raises(UnsupportedURLSchemeError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download(self, mockserver: MockServer) -> None:
         request = Request(mockserver.url("/text", is_secure=self.is_secure))
         async with self.get_dh() as download_handler:
             response = await download_handler.download_request(request)
         assert response.body == b"Works"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_head(self, mockserver: MockServer) -> None:
         request = Request(
             mockserver.url("/text", is_secure=self.is_secure), method="HEAD"
@@ -97,7 +104,7 @@ class TestHttpBase(ABC):
             if http_status.value == 200 or http_status.value // 100 in (4, 5)
         ],
     )
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_has_correct_http_status_code(
         self, mockserver: MockServer, http_status: HTTPStatus
     ) -> None:
@@ -108,7 +115,7 @@ class TestHttpBase(ABC):
             response = await download_handler.download_request(request)
         assert response.status == http_status.value
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_server_receives_correct_request_headers(
         self, mockserver: MockServer
     ) -> None:
@@ -135,7 +142,7 @@ class TestHttpBase(ABC):
             assert header_name in body["headers"]
             assert body["headers"][header_name] == [header_value]
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_request_header_none(self, mockserver: MockServer) -> None:
         """Adding a header with None as the value should not send that header."""
         request_headers = {
@@ -161,7 +168,7 @@ class TestHttpBase(ABC):
             [("X-Custom-Header", "foo"), ("X-Custom-Header", "bar")],
         ],
     )
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_request_header_duplicate(
         self, mockserver: MockServer, request_headers: Any
     ) -> None:
@@ -177,7 +184,7 @@ class TestHttpBase(ABC):
         assert "headers" in body
         assert body["headers"]["X-Custom-Header"] == ["foo", "bar"]
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_server_receives_correct_request_body(
         self, mockserver: MockServer
     ) -> None:
@@ -194,7 +201,7 @@ class TestHttpBase(ABC):
         body = json.loads(response.body.decode("utf-8"))
         assert json.loads(body["body"]) == request_body
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_has_correct_response_headers(
         self, mockserver: MockServer
     ) -> None:
@@ -233,14 +240,14 @@ class TestHttpBase(ABC):
                 header_value, encoding="utf-8"
             )
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_redirect_status(self, mockserver: MockServer) -> None:
         request = Request(mockserver.url("/redirect", is_secure=self.is_secure))
         async with self.get_dh() as download_handler:
             response = await download_handler.download_request(request)
         assert response.status == 302
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_redirect_status_head(self, mockserver: MockServer) -> None:
         request = Request(
             mockserver.url("/redirect", is_secure=self.is_secure), method="HEAD"
@@ -249,7 +256,7 @@ class TestHttpBase(ABC):
             response = await download_handler.download_request(request)
         assert response.status == 302
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_timeout_download_from_spider_nodata_rcvd(
         self, mockserver: MockServer, reactor_pytest: str
     ) -> None:
@@ -267,7 +274,7 @@ class TestHttpBase(ABC):
             with pytest.raises(DownloadTimeoutError):
                 await maybe_deferred_to_future(d)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_timeout_download_from_spider_server_hangs(
         self,
         mockserver: MockServer,
@@ -289,7 +296,7 @@ class TestHttpBase(ABC):
                 await maybe_deferred_to_future(d)
 
     @pytest.mark.parametrize("send_header", [True, False])
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_host_header(self, send_header: bool, mockserver: MockServer) -> None:
         host_port = f"{mockserver.host}:{mockserver.port(is_secure=self.is_secure)}"
         request = Request(
@@ -304,7 +311,7 @@ class TestHttpBase(ABC):
         else:
             assert not request.headers
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_content_length_zero_bodyless_post_request_headers(
         self, mockserver: MockServer
     ) -> None:
@@ -325,7 +332,7 @@ class TestHttpBase(ABC):
             response = await download_handler.download_request(request)
         assert response.body == b"0"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_content_length_zero_bodyless_post_only_one(
         self, mockserver: MockServer
     ) -> None:
@@ -339,7 +346,7 @@ class TestHttpBase(ABC):
         assert len(contentlengths) == 1
         assert contentlengths == [b"0"]
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_payload(self, mockserver: MockServer) -> None:
         body = b"1" * 100  # PayloadResource requires body length to be 100
         request = Request(
@@ -351,7 +358,7 @@ class TestHttpBase(ABC):
             response = await download_handler.download_request(request)
         assert response.body == body
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_response_header_content_length(self, mockserver: MockServer) -> None:
         request = Request(
             mockserver.url("/text", is_secure=self.is_secure), method="GET"
@@ -367,7 +374,7 @@ class TestHttpBase(ABC):
             ("foo", b"<!DOCTYPE html>\n<title>.</title>", HtmlResponse),
         ],
     )
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_response_class(
         self,
         filename: str,
@@ -382,14 +389,14 @@ class TestHttpBase(ABC):
             response = await download_handler.download_request(request)
         assert type(response) is response_class  # pylint: disable=unidiomatic-typecheck
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_get_duplicate_header(self, mockserver: MockServer) -> None:
         request = Request(mockserver.url("/duplicate-header", is_secure=self.is_secure))
         async with self.get_dh() as download_handler:
             response = await download_handler.download_request(request)
         assert response.headers.getlist(b"Set-Cookie") == [b"a=b", b"c=d"]
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_is_not_automatically_gzip_decoded(
         self, mockserver: MockServer
     ) -> None:
@@ -423,7 +430,7 @@ class TestHttpBase(ABC):
         expected_decoding = bytes(data, encoding="utf-8")
         assert gzip.decompress(response.body) == expected_decoding
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_no_cookie_processing_or_persistence(
         self, mockserver: MockServer
     ) -> None:
@@ -454,14 +461,14 @@ class TestHttpBase(ABC):
 class TestHttp11Base(TestHttpBase):
     """HTTP 1.1 test case"""
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_without_maxsize_limit(self, mockserver: MockServer) -> None:
         request = Request(mockserver.url("/text", is_secure=self.is_secure))
         async with self.get_dh() as download_handler:
             response = await download_handler.download_request(request)
         assert response.body == b"Works"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_response_class_choosing_request(
         self, mockserver: MockServer
     ) -> None:
@@ -476,8 +483,10 @@ class TestHttp11Base(TestHttpBase):
             response = await download_handler.download_request(request)
         assert type(response) is TextResponse  # pylint: disable=unidiomatic-typecheck
 
-    @deferred_f_from_coro_f
-    async def test_download_with_maxsize(self, mockserver: MockServer) -> None:
+    @coroutine_test
+    async def test_download_with_maxsize(
+        self, caplog: pytest.LogCaptureFixture, mockserver: MockServer
+    ) -> None:
         request = Request(mockserver.url("/text", is_secure=self.is_secure))
 
         # 10 is minimal size for this request and the limit is only counted on
@@ -486,11 +495,14 @@ class TestHttp11Base(TestHttpBase):
             response = await download_handler.download_request(request)
         assert response.body == b"Works"
 
+        caplog.clear()
+        msg = "Expected to receive 5 bytes which is larger than download max size (4)"
         async with self.get_dh({"DOWNLOAD_MAXSIZE": 4}) as download_handler:
-            with pytest.raises(DownloadCancelledError):
+            with pytest.raises(DownloadCancelledError, match=re.escape(msg)):
                 await download_handler.download_request(request)
+        assert msg in caplog.text
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_maxsize_very_large_file(
         self, mockserver: MockServer, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -498,10 +510,12 @@ class TestHttp11Base(TestHttpBase):
         async with self.get_dh({"DOWNLOAD_MAXSIZE": 1_500}) as download_handler:
             with pytest.raises(DownloadCancelledError):
                 await download_handler.download_request(request)
+        assert (
+            "Received 2048 bytes which is larger than download max size (1500)"
+            in caplog.text
+        )
 
-        assert "larger than download max size" in caplog.text
-
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_maxsize_per_req(self, mockserver: MockServer) -> None:
         meta = {"download_maxsize": 2}
         request = Request(mockserver.url("/text", is_secure=self.is_secure), meta=meta)
@@ -509,7 +523,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(DownloadCancelledError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_small_maxsize_via_setting(
         self, mockserver: MockServer
     ) -> None:
@@ -518,7 +532,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(DownloadCancelledError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_large_maxsize_via_setting(
         self, mockserver: MockServer
     ) -> None:
@@ -527,7 +541,35 @@ class TestHttp11Base(TestHttpBase):
             response = await download_handler.download_request(request)
         assert response.body == b"Works"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
+    async def test_download_with_warnsize(
+        self, caplog: pytest.LogCaptureFixture, mockserver: MockServer
+    ) -> None:
+        request = Request(mockserver.url("/text", is_secure=self.is_secure))
+        async with self.get_dh({"DOWNLOAD_WARNSIZE": 4}) as download_handler:
+            response = await download_handler.download_request(request)
+        assert response.body == b"Works"
+        assert (
+            "Expected to receive 5 bytes which is larger than download warn size (4)"
+            in caplog.text
+        )
+
+    @coroutine_test
+    async def test_download_with_warnsize_no_content_length(
+        self, caplog: pytest.LogCaptureFixture, mockserver: MockServer
+    ) -> None:
+        request = Request(
+            mockserver.url("/delay?n=0.1", is_secure=self.is_secure),
+        )
+        async with self.get_dh({"DOWNLOAD_WARNSIZE": 10}) as download_handler:
+            response = await download_handler.download_request(request)
+        assert response.body == b"Response delayed for 0.100 seconds\n"
+        assert (
+            "Received 35 bytes which is larger than download warn size (10)"
+            in caplog.text
+        )
+
+    @coroutine_test
     async def test_download_chunked_content(self, mockserver: MockServer) -> None:
         request = Request(mockserver.url("/chunked", is_secure=self.is_secure))
         async with self.get_dh() as download_handler:
@@ -535,7 +577,7 @@ class TestHttp11Base(TestHttpBase):
         assert response.body == b"chunked content\n"
 
     @pytest.mark.parametrize("url", ["broken", "broken-chunked"])
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_cause_data_loss(
         self, url: str, mockserver: MockServer
     ) -> None:
@@ -544,7 +586,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(ResponseDataLossError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_cause_data_loss_double_warning(
         self, caplog: pytest.LogCaptureFixture, mockserver: MockServer
     ) -> None:
@@ -560,7 +602,7 @@ class TestHttp11Base(TestHttpBase):
             assert "Got data loss" not in caplog.text
 
     @pytest.mark.parametrize("url", ["broken", "broken-chunked"])
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_allow_data_loss(
         self, url: str, mockserver: MockServer
     ) -> None:
@@ -573,7 +615,7 @@ class TestHttp11Base(TestHttpBase):
         assert response.flags == ["dataloss"]
 
     @pytest.mark.parametrize("url", ["broken", "broken-chunked"])
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_allow_data_loss_via_setting(
         self, url: str, mockserver: MockServer
     ) -> None:
@@ -584,7 +626,7 @@ class TestHttp11Base(TestHttpBase):
             response = await download_handler.download_request(request)
         assert response.flags == ["dataloss"]
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_conn_failed(self) -> None:
         # copy of TestCrawl.test_retry_conn_failed()
         scheme = "https" if self.is_secure else "http"
@@ -593,7 +635,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(DownloadConnectionRefusedError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_conn_lost(self, mockserver: MockServer) -> None:
         # copy of TestCrawl.test_retry_conn_lost()
         request = Request(mockserver.url("/drop?abort=0", is_secure=self.is_secure))
@@ -601,7 +643,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(ResponseDataLossError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_conn_aborted(self, mockserver: MockServer) -> None:
         # copy of TestCrawl.test_retry_conn_aborted()
         request = Request(mockserver.url("/drop?abort=1", is_secure=self.is_secure))
@@ -612,7 +654,7 @@ class TestHttp11Base(TestHttpBase):
     @pytest.mark.skipif(
         NON_EXISTING_RESOLVABLE, reason="Non-existing hosts are resolvable"
     )
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_dns_error(self) -> None:
         # copy of TestCrawl.test_retry_dns_error()
         scheme = "https" if self.is_secure else "http"
@@ -621,7 +663,7 @@ class TestHttp11Base(TestHttpBase):
             with pytest.raises(CannotResolveHostError):
                 await download_handler.download_request(request)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_protocol(self, mockserver: MockServer) -> None:
         request = Request(
             mockserver.url("/host", is_secure=self.is_secure), method="GET"
@@ -629,6 +671,36 @@ class TestHttp11Base(TestHttpBase):
         async with self.get_dh() as download_handler:
             response = await download_handler.download_request(request)
         assert response.protocol == "HTTP/1.1"
+
+    # skip macOS tests
+    @pytest.mark.skipif(
+        sys.platform == "darwin",
+        reason="127.0.0.2 is not available on macOS by default",
+    )
+    @coroutine_test
+    async def test_download_bind_address_setting(self, mockserver: MockServer) -> None:
+        request = Request(mockserver.url("/client-ip", is_secure=self.is_secure))
+        async with self.get_dh(
+            {"DOWNLOAD_BIND_ADDRESS": ("127.0.0.2", 0)}
+        ) as download_handler:
+            response = await download_handler.download_request(request)
+        assert response.body == b"127.0.0.2"
+
+    # skip macOS tests
+    @pytest.mark.skipif(
+        sys.platform == "darwin",
+        reason="127.0.0.2 is not available on macOS by default",
+    )
+    @coroutine_test
+    async def test_download_bind_address_setting_string(
+        self, mockserver: MockServer
+    ) -> None:
+        request = Request(mockserver.url("/client-ip", is_secure=self.is_secure))
+        async with self.get_dh(
+            {"DOWNLOAD_BIND_ADDRESS": "127.0.0.2"}
+        ) as download_handler:
+            response = await download_handler.download_request(request)
+        assert response.body == b"127.0.0.2"
 
 
 class TestHttps11Base(TestHttp11Base):
@@ -645,7 +717,7 @@ class TestHttps11Base(TestHttp11Base):
         # (not just Scrapy) hang on /drop?abort=0.
         pytest.skip("Unable to test on HTTPS")
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_tls_logging(
         self, mockserver: MockServer, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -657,6 +729,38 @@ class TestHttps11Base(TestHttp11Base):
                 response = await download_handler.download_request(request)
         assert response.body == b"Works"
         assert self.tls_log_message in caplog.text
+
+    @coroutine_test
+    async def test_verify_certs_deprecated(self, mockserver: MockServer) -> None:
+        request = Request(mockserver.url("/text", is_secure=self.is_secure))
+        with (  # noqa: PT031
+            pytest.warns(
+                ScrapyDeprecationWarning,
+                match="'DOWNLOADER_CLIENTCONTEXTFACTORY' setting is deprecated",
+            ),
+            pytest.warns(
+                ScrapyDeprecationWarning,
+                match="BrowserLikeContextFactory is deprecated",
+            ),
+        ):
+            async with self.get_dh(
+                {
+                    "DOWNLOADER_CLIENTCONTEXTFACTORY": "scrapy.core.downloader.contextfactory.BrowserLikeContextFactory"
+                }
+            ) as download_handler:
+                with pytest.raises(
+                    (DownloadConnectionRefusedError, DownloadFailedError)
+                ):
+                    await download_handler.download_request(request)
+
+    @coroutine_test
+    async def test_verify_certs(self, mockserver: MockServer) -> None:
+        request = Request(mockserver.url("/text", is_secure=self.is_secure))
+        async with self.get_dh(
+            {"DOWNLOAD_VERIFY_CERTIFICATES": True}
+        ) as download_handler:
+            with pytest.raises((DownloadConnectionRefusedError, DownloadFailedError)):
+                await download_handler.download_request(request)
 
 
 class TestSimpleHttpsBase(ABC):
@@ -698,7 +802,7 @@ class TestSimpleHttpsBase(ABC):
         finally:
             await dh.close()
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download(self, url: str) -> None:
         request = Request(url)
         async with self.get_dh() as download_handler:
@@ -741,7 +845,7 @@ class TestHttpWithCrawlerBase(ABC):
 
     is_secure = False
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_content_length(self, mockserver: MockServer) -> None:
         crawler = get_crawler(SingleRequestSpider, self.settings_dict)
         # http://localhost:8998/partial set Content-Length to 1024, use download_maxsize= 1000 to avoid
@@ -758,7 +862,7 @@ class TestHttpWithCrawlerBase(ABC):
         failure = crawler.spider.meta["failure"]  # type: ignore[attr-defined]
         assert isinstance(failure.value, DownloadCancelledError)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download(self, mockserver: MockServer) -> None:
         crawler = get_crawler(SingleRequestSpider, self.settings_dict)
         await maybe_deferred_to_future(
@@ -772,7 +876,7 @@ class TestHttpWithCrawlerBase(ABC):
         reason = crawler.spider.meta["close_reason"]  # type: ignore[attr-defined]
         assert reason == "finished"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_response_ssl_certificate(self, mockserver: MockServer) -> None:
         if not self.is_secure:
             pytest.skip("Only applies to HTTPS")
@@ -787,7 +891,7 @@ class TestHttpWithCrawlerBase(ABC):
         assert cert.getSubject().commonName == b"localhost"
         assert cert.getIssuer().commonName == b"localhost"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_response_ip_address(self, mockserver: MockServer) -> None:
         # copy of TestCrawl.test_response_ip_address()
         crawler = get_crawler(SingleRequestSpider, self.settings_dict)
@@ -798,6 +902,74 @@ class TestHttpWithCrawlerBase(ABC):
         ip_address = crawler.spider.meta["responses"][0].ip_address
         assert isinstance(ip_address, IPv4Address)
         assert str(ip_address) == gethostbyname(expected_netloc)
+
+    @coroutine_test
+    async def test_bytes_received_stop_download_callback(
+        self, mockserver: MockServer
+    ) -> None:
+        # copy of TestCrawl.test_bytes_received_stop_download_callback()
+        crawler = get_crawler(BytesReceivedCallbackSpider, self.settings_dict)
+        await crawler.crawl_async(mockserver=mockserver, is_secure=self.is_secure)
+        assert isinstance(crawler.spider, BytesReceivedCallbackSpider)
+        assert crawler.spider.meta.get("failure") is None
+        assert isinstance(crawler.spider.meta["response"], Response)
+        assert crawler.spider.meta["response"].body == crawler.spider.meta.get(
+            "bytes_received"
+        )
+        assert (
+            len(crawler.spider.meta["response"].body)
+            < crawler.spider.full_response_length
+        )
+
+    @coroutine_test
+    async def test_bytes_received_stop_download_errback(
+        self, mockserver: MockServer
+    ) -> None:
+        # copy of TestCrawl.test_bytes_received_stop_download_errback()
+        crawler = get_crawler(BytesReceivedErrbackSpider, self.settings_dict)
+        await crawler.crawl_async(mockserver=mockserver, is_secure=self.is_secure)
+        assert isinstance(crawler.spider, BytesReceivedErrbackSpider)
+        assert crawler.spider.meta.get("response") is None
+        assert isinstance(crawler.spider.meta["failure"], Failure)
+        assert isinstance(crawler.spider.meta["failure"].value, StopDownload)
+        assert isinstance(crawler.spider.meta["failure"].value.response, Response)
+        assert crawler.spider.meta[
+            "failure"
+        ].value.response.body == crawler.spider.meta.get("bytes_received")
+        assert (
+            len(crawler.spider.meta["failure"].value.response.body)
+            < crawler.spider.full_response_length
+        )
+
+    @coroutine_test
+    async def test_headers_received_stop_download_callback(
+        self, mockserver: MockServer
+    ) -> None:
+        # copy of TestCrawl.test_headers_received_stop_download_callback()
+        crawler = get_crawler(HeadersReceivedCallbackSpider, self.settings_dict)
+        await crawler.crawl_async(mockserver=mockserver, is_secure=self.is_secure)
+        assert isinstance(crawler.spider, HeadersReceivedCallbackSpider)
+        assert crawler.spider.meta.get("failure") is None
+        assert isinstance(crawler.spider.meta["response"], Response)
+        assert crawler.spider.meta["response"].headers == crawler.spider.meta.get(
+            "headers_received"
+        )
+
+    @coroutine_test
+    async def test_headers_received_stop_download_errback(
+        self, mockserver: MockServer
+    ) -> None:
+        # copy of TestCrawl.test_headers_received_stop_download_errback()
+        crawler = get_crawler(HeadersReceivedErrbackSpider, self.settings_dict)
+        await crawler.crawl_async(mockserver=mockserver, is_secure=self.is_secure)
+        assert isinstance(crawler.spider, HeadersReceivedErrbackSpider)
+        assert crawler.spider.meta.get("response") is None
+        assert isinstance(crawler.spider.meta["failure"], Failure)
+        assert isinstance(crawler.spider.meta["failure"].value, StopDownload)
+        assert isinstance(crawler.spider.meta["failure"].value.response, Response)
+        assert crawler.spider.meta[
+            "failure"
+        ].value.response.headers == crawler.spider.meta.get("headers_received")
 
 
 class TestHttpProxyBase(ABC):
@@ -824,7 +996,7 @@ class TestHttpProxyBase(ABC):
         finally:
             await dh.close()
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_proxy(
         self, proxy_mockserver: ProxyEchoMockServer
     ) -> None:
@@ -836,7 +1008,7 @@ class TestHttpProxyBase(ABC):
         assert response.url == request.url
         assert response.body == self.expected_http_proxy_request_body
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_without_proxy(
         self, proxy_mockserver: ProxyEchoMockServer
     ) -> None:
@@ -849,7 +1021,7 @@ class TestHttpProxyBase(ABC):
         assert response.url == request.url
         assert response.body == b"/path/to/resource"
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_proxy_https_timeout(
         self, proxy_mockserver: ProxyEchoMockServer
     ) -> None:
@@ -863,7 +1035,7 @@ class TestHttpProxyBase(ABC):
                 await download_handler.download_request(request)
         assert domain in str(exc_info.value)
 
-    @deferred_f_from_coro_f
+    @coroutine_test
     async def test_download_with_proxy_without_http_scheme(
         self, proxy_mockserver: ProxyEchoMockServer
     ) -> None:
