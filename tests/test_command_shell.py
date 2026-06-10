@@ -4,7 +4,7 @@ import os
 import sys
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 from pexpect.popen_spawn import PopenSpawn
@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 class TestShellCommand:
     def test_empty(self) -> None:
         _, out, _ = proc("shell", "-c", "item")
+        assert "{}" in out
+
+    def test_empty_no_reactor(self) -> None:
+        _, out, _ = proc(
+            "shell", "-c", "item", "--set", "TWISTED_REACTOR_ENABLED=False"
+        )
         assert "{}" in out
 
     def test_response_body(self, mockserver: MockServer) -> None:
@@ -125,7 +131,6 @@ class TestShellCommand:
         assert ret == 0, err
         assert "RuntimeError: There is no current event loop in thread" not in err
 
-    @pytest.mark.xfail(reason="Not implemented yet", strict=True)
     def test_shell_fetch_no_reactor(self, mockserver: MockServer) -> None:
         url = mockserver.url("/html")
         code = f"fetch('{url}')"
@@ -133,17 +138,6 @@ class TestShellCommand:
             "shell", "-c", code, "--set", "TWISTED_REACTOR_ENABLED=False"
         )
         assert ret == 0, err
-
-    def test_no_reactor_unsupported(self) -> None:
-        # to be removed when it's supported
-        ret, out, err = proc(
-            "shell", "-c", "item", "--set", "TWISTED_REACTOR_ENABLED=False"
-        )
-        assert ret == 1, out or err
-        assert (
-            "RuntimeError: scrapy shell currently doesn't support TWISTED_REACTOR_ENABLED=False"
-            in err
-        )
 
 
 class TestInteractiveShell:
@@ -157,8 +151,7 @@ class TestInteractiveShell:
         env = os.environ.copy()
         env["SCRAPY_PYTHON_SHELL"] = "python"
         logfile = BytesIO()
-        # https://github.com/python/typeshed/issues/14915
-        p = PopenSpawn(args, env=cast("os._Environ", env), timeout=5)
+        p = PopenSpawn(args, env=env, timeout=5)
         p.logfile_read = logfile
         p.expect_exact("Available Scrapy objects")
         p.sendline(f"fetch('{mockserver.url('/')}')")

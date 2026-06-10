@@ -162,6 +162,19 @@ class TestRequest:
         r4 = self.request_class(url="http://www.example.org/r%E9sum%E9.html")
         assert r4.url == "http://www.example.org/r%E9sum%E9.html"
 
+    def test_url_verbatim(self):
+        r = self.request_class(
+            url="http://www.scrapy.org/price/£",
+            meta={"verbatim_url": True},
+        )
+        assert r.url == "http://www.scrapy.org/price/£"
+
+        r = self.request_class(
+            url="http://www.scrapy.org/blank space",
+            meta={"verbatim_url": True},
+        )
+        assert r.url == "http://www.scrapy.org/blank space"
+
     def test_body(self):
         r1 = self.request_class(url="http://www.example.com/")
         assert r1.body == b""
@@ -349,6 +362,7 @@ class TestRequest:
         assert request._flags == []
         original_flags = request.flags
         request.flags = None
+        assert request._flags is None
         assert request.flags == []
         assert request.flags is not original_flags
 
@@ -358,6 +372,7 @@ class TestRequest:
         assert request._cookies == {}
         original_cookies = request.cookies
         request.cookies = None
+        assert request._cookies is None
         assert request.cookies == {}
         assert request.cookies is not original_cookies
 
@@ -373,7 +388,9 @@ class TestRequest:
         assert isinstance(request._headers, Headers)
         original_headers = request.headers
         request.headers = None
+        assert request._headers is None
         assert request.headers == {}
+        assert request._headers == {}
         assert request.headers is not original_headers
 
     def test_no_callback(self):

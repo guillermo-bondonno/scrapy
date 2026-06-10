@@ -745,7 +745,24 @@ HttpProxyMiddleware
     Handling of this meta key needs to be implemented inside the :ref:`download
     handler <topics-download-handlers>`, so it's not guaranteed to be supported
     by all 3rd-party handlers. It's currently unsupported by
-    :class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler`.
+    :class:`~scrapy.core.downloader.handlers.http2.H2DownloadHandler`.
+
+.. note::
+
+    Usually a proxy URL uses the ``http://`` scheme. More rarely, it uses the
+    ``https://`` one. While both kinds of proxy URLs can be used with both HTTP
+    and HTTPS destination URLs, the specifics of the network exchange are
+    different for all 4 cases and it's possible that HTTPS proxies are fully or
+    partially unsupported by a given download handler. Currently,
+    :class:`~scrapy.core.downloader.handlers.http11.HTTP11DownloadHandler`
+    supports HTTPS proxies only for HTTP destinations.
+
+.. note::
+
+    If the download handler supports it, you can use a SOCKS proxy URL (e.g.
+    ``socks5://username:password@some_proxy_server:port``).
+    :class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler`
+    supports SOCKS proxies while other built-in handlers don't.
 
 HttpProxyMiddleware settings
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1042,6 +1059,21 @@ has been exceeded (see :setting:`RETRY_TIMES`). To learn about uncaught
 exception propagation, see
 :meth:`~scrapy.downloadermiddlewares.DownloaderMiddleware.process_exception`.
 
+.. setting:: RETRY_GIVE_UP_LOG_LEVEL
+
+RETRY_GIVE_UP_LOG_LEVEL
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Default: ``"ERROR"``
+
+:ref:`Logging level <levels>` used for the message logged when a request
+exceeds its retries.
+
+Can be a level name (e.g. ``"WARNING"``) or a number (e.g. ``logging.WARNING``
+or ``30``).
+
+See also: :reqmeta:`give_up_log_level`, :func:`get_retry_request`.
+
 .. setting:: RETRY_PRIORITY_ADJUST
 
 RETRY_PRIORITY_ADJUST
@@ -1103,7 +1135,7 @@ Parsers vary in several aspects:
 
 * Support for wildcard matching
 
-* Usage of `length based rule <https://developers.google.com/search/docs/crawling-indexing/robots/robots_txt#order-of-precedence-for-rules>`_:
+* Usage of `length based rule <https://developers.google.com/crawling/docs/robots-txt/robots-txt-spec#order-of-precedence-for-rules>`_:
   in particular for ``Allow`` and ``Disallow`` directives, where the most
   specific rule based on the length of the path trumps the less specific
   (shorter) rule
@@ -1121,7 +1153,7 @@ Based on `Protego <https://github.com/scrapy/protego>`_:
 * implemented in Python
 
 * is compliant with `Google's Robots.txt Specification
-  <https://developers.google.com/search/docs/crawling-indexing/robots/robots_txt>`_
+  <https://developers.google.com/crawling/docs/robots-txt/robots-txt-spec>`_
 
 * supports wildcard matching
 
@@ -1141,9 +1173,9 @@ Based on :class:`~urllib.robotparser.RobotFileParser`:
 * is compliant with `Martijn Koster's 1996 draft specification
   <https://www.robotstxt.org/norobots-rfc.txt>`_
 
-* lacks support for wildcard matching
+* lacks support for wildcard matching (before Python 3.14.5)
 
-* doesn't use the length based rule
+* doesn't use the length based rule (before Python 3.14.5)
 
 It is faster than Protego and backward-compatible with versions of Scrapy before 1.8.0.
 

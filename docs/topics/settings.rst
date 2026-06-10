@@ -332,7 +332,7 @@ These settings are:
 -   :setting:`ASYNCIO_EVENT_LOOP` (not possible to set per-spider when using
     :class:`~scrapy.crawler.AsyncCrawlerProcess`, see below)
 
--   :setting:`DNS_RESOLVER` and settings used by the corresponding
+-   :setting:`TWISTED_DNS_RESOLVER` and settings used by the corresponding
     component, e.g. :setting:`DNSCACHE_ENABLED`, :setting:`DNSCACHE_SIZE`
     and :setting:`DNS_TIMEOUT` for the default one.
 
@@ -671,10 +671,10 @@ Default: ``10000``
 
 DNS in-memory cache size, see :setting:`DNSCACHE_ENABLED`.
 
-.. setting:: DNS_RESOLVER
+.. setting:: TWISTED_DNS_RESOLVER
 
-DNS_RESOLVER
-------------
+TWISTED_DNS_RESOLVER
+--------------------
 
 Default: ``'scrapy.resolver.CachingThreadedResolver'``
 
@@ -737,32 +737,50 @@ specific cipher that is not included in ``DEFAULT`` if a website requires it.
     by all 3rd-party handlers. It's currently unsupported by
     :class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler`.
 
-.. setting:: DOWNLOADER_CLIENT_TLS_METHOD
+.. setting:: DOWNLOAD_TLS_MAX_VERSION
 
-DOWNLOADER_CLIENT_TLS_METHOD
-----------------------------
+DOWNLOAD_TLS_MAX_VERSION
+------------------------
 
-Default: ``'TLS'``
+Default: ``None``
 
-Use this setting to customize the TLS/SSL method used by the HTTPS download
-handler.
+Use this setting to change the maximum version of the TLS protocol allowed to
+be used by Scrapy.
 
-This setting must be one of these string values:
+This setting must be either ``None``, in which case it doesn't affect the
+version selection, or one of these string values:
 
-- ``'TLS'``: maps to OpenSSL's ``TLS_method()`` (a.k.a ``SSLv23_method()``),
-  which allows protocol negotiation, starting from the highest supported
-  by the platform; **default, recommended**
-- ``'TLSv1.0'``: this value forces HTTPS connections to use TLS version 1.0 ;
-  set this if you want the behavior of Scrapy<1.1
-- ``'TLSv1.1'``: forces TLS version 1.1
-- ``'TLSv1.2'``: forces TLS version 1.2
+- ``'TLSv1.0'``
+- ``'TLSv1.1'``
+- ``'TLSv1.2'``
+- ``'TLSv1.3'``
+
+The range of allowed TLS versions advertised by Scrapy when making TLS
+connections will depend on the TLS implementation defaults and the values of
+:setting:`DOWNLOAD_TLS_MIN_VERSION` and :setting:`DOWNLOAD_TLS_MAX_VERSION`.
+It's possible to re-enable versions that are supported by the TLS
+implementation but disabled by default by adjusting these settings, but it's
+impossible to enable unsupported ones, such as any versions below 1.2 in many
+modern environments.
 
 .. note::
 
     Handling of this setting needs to be implemented inside the :ref:`download
     handler <topics-download-handlers>`, so it's not guaranteed to be supported
-    by all 3rd-party handlers. It's currently unsupported by
-    :class:`~scrapy.core.downloader.handlers._httpx.HttpxDownloadHandler`.
+    by all 3rd-party handlers. Additionally, the set of supported TLS versions
+    depends on the TLS implementation being used by the handler.
+
+.. setting:: DOWNLOAD_TLS_MIN_VERSION
+
+DOWNLOAD_TLS_MIN_VERSION
+------------------------
+
+Default: ``None``
+
+Use this setting to change the minimum version of the TLS protocol allowed to
+be used by Scrapy.
+
+See :setting:`DOWNLOAD_TLS_MAX_VERSION` for the details and limitations.
 
 .. setting:: DOWNLOADER_CLIENT_TLS_VERBOSE_LOGGING
 
@@ -787,7 +805,7 @@ the TLS-related libraries.
 DOWNLOADER_MIDDLEWARES
 ----------------------
 
-Default:: ``{}``
+Default: ``{}``
 
 A dict containing the downloader middlewares enabled in your project, and their
 orders. For more info see :ref:`topics-downloader-middleware-setting`.
@@ -809,7 +827,6 @@ Default:
         "scrapy.downloadermiddlewares.defaultheaders.DefaultHeadersMiddleware": 400,
         "scrapy.downloadermiddlewares.useragent.UserAgentMiddleware": 500,
         "scrapy.downloadermiddlewares.retry.RetryMiddleware": 550,
-        "scrapy.downloadermiddlewares.ajaxcrawl.AjaxCrawlMiddleware": 560,
         "scrapy.downloadermiddlewares.redirect.MetaRefreshMiddleware": 580,
         "scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware": 590,
         "scrapy.downloadermiddlewares.redirect.RedirectMiddleware": 600,
@@ -1239,7 +1256,7 @@ command will prefer it over the default setting.
 EXTENSIONS
 ----------
 
-Default:: ``{}``
+Default: ``{}``
 
 :ref:`Component priority dictionary <component-priority-dictionaries>` of
 enabled extensions. See :ref:`topics-extensions`.
@@ -1287,7 +1304,7 @@ FEED_STORAGE_GCS_ACL
 --------------------
 
 The Access Control List (ACL) used when storing items to :ref:`Google Cloud Storage <topics-feed-storage-gcs>`.
-For more information on how to set this value, please refer to the column *JSON API* in `Google Cloud documentation <https://cloud.google.com/storage/docs/access-control/lists>`_.
+For more information on how to set this value, please refer to the column *JSON API* in `Google Cloud documentation <https://docs.cloud.google.com/storage/docs/access-control/lists>`_.
 
 .. setting:: FORCE_CRAWLER_PROCESS
 
@@ -1861,7 +1878,7 @@ Scrapy does not process new requests.
 SPIDER_CONTRACTS
 ----------------
 
-Default:: ``{}``
+Default: ``{}``
 
 A dict containing the spider contracts enabled in your project, used for
 testing spiders. For more info see :ref:`topics-contracts`.
@@ -1922,7 +1939,7 @@ warning by setting ``SPIDER_LOADER_WARN_ONLY = True``.
 SPIDER_MIDDLEWARES
 ------------------
 
-Default:: ``{}``
+Default: ``{}``
 
 A dict containing the spider middlewares enabled in your project, and their
 orders. For more info see :ref:`topics-spider-middleware-setting`.
@@ -2162,7 +2179,7 @@ Use ``0`` to allow URLs of any length.
 The default value is copied from the `Microsoft Internet Explorer maximum URL
 length`_, even though this setting exists for different reasons.
 
-.. _Microsoft Internet Explorer maximum URL length: https://support.microsoft.com/en-us/topic/maximum-url-length-is-2-083-characters-in-internet-explorer-174e7c8a-6666-f4e0-6fd6-908b53c12246
+.. _Microsoft Internet Explorer maximum URL length: https://web.archive.org/web/20250206050143/https://support.microsoft.com/en-us/topic/maximum-url-length-is-2-083-characters-in-internet-explorer-174e7c8a-6666-f4e0-6fd6-908b53c12246
 
 .. setting:: USER_AGENT
 
@@ -2201,6 +2218,4 @@ case to see how to enable and use them.
 .. settingslist::
 
 .. _Amazon web services: https://aws.amazon.com/
-.. _breadth-first order: https://en.wikipedia.org/wiki/Breadth-first_search
-.. _depth-first order: https://en.wikipedia.org/wiki/Depth-first_search
 .. _Google Cloud Storage: https://cloud.google.com/storage/

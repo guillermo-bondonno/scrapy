@@ -16,6 +16,7 @@ Scrapy developers, if you add a setting here remember to:
 import sys
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "ADDONS",
@@ -48,14 +49,12 @@ __all__ = [
     "DEPTH_STATS_VERBOSE",
     "DNSCACHE_ENABLED",
     "DNSCACHE_SIZE",
-    "DNS_RESOLVER",
     "DNS_TIMEOUT",
     "DOWNLOADER",
     "DOWNLOADER_CLIENTCONTEXTFACTORY",
     "DOWNLOADER_CLIENT_TLS_CIPHERS",
     "DOWNLOADER_CLIENT_TLS_METHOD",
     "DOWNLOADER_CLIENT_TLS_VERBOSE_LOGGING",
-    "DOWNLOADER_HTTPCLIENTFACTORY",
     "DOWNLOADER_MIDDLEWARES",
     "DOWNLOADER_MIDDLEWARES_BASE",
     "DOWNLOADER_STATS",
@@ -66,6 +65,8 @@ __all__ = [
     "DOWNLOAD_HANDLERS_BASE",
     "DOWNLOAD_MAXSIZE",
     "DOWNLOAD_TIMEOUT",
+    "DOWNLOAD_TLS_MAX_VERSION",
+    "DOWNLOAD_TLS_MIN_VERSION",
     "DOWNLOAD_WARNSIZE",
     "DUPEFILTER_CLASS",
     "EDITOR",
@@ -108,6 +109,7 @@ __all__ = [
     "HTTPCACHE_STORAGE",
     "HTTPPROXY_AUTH_ENCODING",
     "HTTPPROXY_ENABLED",
+    "HTTPX_HTTP2_ENABLED",
     "IMAGES_STORE_GCS_ACL",
     "IMAGES_STORE_S3_ACL",
     "ITEM_PIPELINES",
@@ -155,6 +157,7 @@ __all__ = [
     "REQUEST_FINGERPRINTER_CLASS",
     "RETRY_ENABLED",
     "RETRY_EXCEPTIONS",
+    "RETRY_GIVE_UP_LOG_LEVEL",
     "RETRY_HTTP_CODES",
     "RETRY_PRIORITY_ADJUST",
     "RETRY_TIMES",
@@ -185,6 +188,7 @@ __all__ = [
     "TELNETCONSOLE_PORT",
     "TELNETCONSOLE_USERNAME",
     "TEMPLATES_DIR",
+    "TWISTED_DNS_RESOLVER",
     "TWISTED_REACTOR",
     "TWISTED_REACTOR_ENABLED",
     "URLLENGTH_LIMIT",
@@ -265,19 +269,17 @@ DOWNLOAD_WARNSIZE = 32 * 1024 * 1024  # 32m
 
 DOWNLOAD_TIMEOUT = 180  # 3mins
 
+DOWNLOAD_TLS_MAX_VERSION = None
+DOWNLOAD_TLS_MIN_VERSION = None
+
 DOWNLOAD_VERIFY_CERTIFICATES = False
 
 DOWNLOADER = "scrapy.core.downloader.Downloader"
 
 DOWNLOADER_CLIENTCONTEXTFACTORY = "SENTINEL"
 DOWNLOADER_CLIENT_TLS_CIPHERS = "DEFAULT"
-# Use highest TLS/SSL protocol version supported by the platform, also allowing negotiation:
 DOWNLOADER_CLIENT_TLS_METHOD = "TLS"
 DOWNLOADER_CLIENT_TLS_VERBOSE_LOGGING = False
-
-DOWNLOADER_HTTPCLIENTFACTORY = (
-    "scrapy.core.downloader.webclient.ScrapyHTTPClientFactory"
-)
 
 DOWNLOADER_MIDDLEWARES = {}
 DOWNLOADER_MIDDLEWARES_BASE = {
@@ -289,7 +291,6 @@ DOWNLOADER_MIDDLEWARES_BASE = {
     "scrapy.downloadermiddlewares.defaultheaders.DefaultHeadersMiddleware": 400,
     "scrapy.downloadermiddlewares.useragent.UserAgentMiddleware": 500,
     "scrapy.downloadermiddlewares.retry.RetryMiddleware": 550,
-    "scrapy.downloadermiddlewares.ajaxcrawl.AjaxCrawlMiddleware": 560,
     "scrapy.downloadermiddlewares.redirect.MetaRefreshMiddleware": 580,
     "scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware": 590,
     "scrapy.downloadermiddlewares.redirect.RedirectMiddleware": 600,
@@ -382,6 +383,8 @@ HTTPCACHE_STORAGE = "scrapy.extensions.httpcache.FilesystemCacheStorage"
 HTTPPROXY_ENABLED = True
 HTTPPROXY_AUTH_ENCODING = "latin-1"
 
+HTTPX_HTTP2_ENABLED = False
+
 IMAGES_STORE_GCS_ACL = ""
 IMAGES_STORE_S3_ACL = "private"
 
@@ -470,6 +473,7 @@ RETRY_EXCEPTIONS = [
     OSError,
     "scrapy.core.downloader.handlers.http11.TunnelError",
 ]
+RETRY_GIVE_UP_LOG_LEVEL = "ERROR"
 RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408, 429]
 RETRY_PRIORITY_ADJUST = -1
 RETRY_TIMES = 2  # initial response + 2 retries = 3 requests
@@ -526,6 +530,8 @@ TELNETCONSOLE_PASSWORD = None
 
 TEMPLATES_DIR = str((Path(__file__).parent / ".." / "templates").resolve())
 
+TWISTED_DNS_RESOLVER = "scrapy.resolver.CachingThreadedResolver"
+
 TWISTED_REACTOR_ENABLED = True
 TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 
@@ -536,7 +542,7 @@ USER_AGENT = f"Scrapy/{import_module('scrapy').__version__} (+https://scrapy.org
 WARN_ON_GENERATOR_RETURN_VALUE = True
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "CONCURRENT_REQUESTS_PER_IP":
         import warnings  # noqa: PLC0415
 
@@ -549,4 +555,4 @@ def __getattr__(name: str):
         )
         return 0
 
-    raise AttributeError
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
